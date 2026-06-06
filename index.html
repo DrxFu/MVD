@@ -6,6 +6,7 @@
 <title>MVD Analysis Suite · Mutant Variety Database</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.27.1/plotly.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
@@ -69,6 +70,9 @@ tbody tr:last-child td{border-bottom:none}
 .num{text-align:right;font-variant-numeric:tabular-nums}.pct{color:var(--accent)}
 .rb{background:var(--inp);border:1px solid var(--border);border-radius:8px;padding:13px 16px;font-family:'Courier New',monospace;font-size:12px;white-space:pre-wrap;line-height:1.65;margin-top:9px;max-height:270px;overflow-y:auto}
 .ok{color:var(--success)}.warn{color:var(--amber)}
+.pval{font-size:15px;font-weight:bold}.pval.ok{color:var(--success)}.pval.warn{color:var(--amber)}
+.verdict{font-size:13px;font-weight:bold;white-space:normal;display:block;margin-top:4px;line-height:1.4}
+.sparse{color:var(--amber);font-size:11.5px;white-space:normal;display:block;margin-top:6px;line-height:1.4}
 .chb{border-radius:8px;overflow:hidden;min-height:370px}
 .dl-row{display:flex;gap:7px;margin-top:7px;justify-content:flex-end}
 .two{display:grid;grid-template-columns:1fr 1.9fr;gap:14px;align-items:start}
@@ -181,7 +185,6 @@ tbody tr:last-child td{border-bottom:none}
         <div class="btn-row">
           <button class="btn bp" id="btn-repo" onclick="loadRepoCSV()">📦 Load Bundled MVD Data</button>
           <button class="btn ba" onclick="document.getElementById('fi').click()">📁 Load Local CSV</button>
-          <button class="btn bo" id="btn-auto" onclick="autoFetch()">⚡ Fetch Latest (mvd.iaea.org)</button>
           <button class="btn bam" onclick="loadDemo()">🧪 Demo Data</button>
         </div>
         <input type="file" id="fi" accept=".csv" onchange="loadCSV(event)">
@@ -470,7 +473,7 @@ print(f<span class="fn">"slope   : {result.slope:.3f} varieties/year"</span>)</p
         <li><strong>Heatmap:</strong> colour-coded count matrix — immediately shows e.g. Japan dominates Rice × Gamma rays, or EMS is nearly exclusive to Europe</li>
         <li><strong>Stacked Bar (%):</strong> normalised to 100% — compare composition regardless of absolute programme size</li>
         <li><strong>Grouped Bar:</strong> side-by-side absolute counts — use when raw programme size matters</li>
-        <li><strong>Sunburst:</strong> hierarchical nested donut — good for Region → Country → Crop Group drill-down</li>
+        <li><strong>Bubble Grid:</strong> every row × column combination as a sized, colour-coded bubble — the most readable way to spot dominant and rare pairings at a glance</li>
         <li><strong>Table:</strong> raw cross-tabulation with row totals for export</li>
       </ul>
     </div>
@@ -490,7 +493,7 @@ print(f<span class="fn">"slope   : {result.slope:.3f} varieties/year"</span>)</p
         <button class="btn bp" onclick="runHeat()">🔥 Heatmap</button>
         <button class="btn ba" onclick="runStack()">📊 Stacked Bar (%)</button>
         <button class="btn bam" onclick="runGroup()">📊 Grouped Bar</button>
-        <button class="btn bpu" onclick="runSun()">☀️ Sunburst</button>
+        <button class="btn bpu" onclick="runBubble()">🫧 Bubble Grid</button>
         <button class="btn bo" onclick="showCT()">🗂 Table</button>
       </div>
       <div class="chb" id="c-chart" style="min-height:420px"></div>
@@ -888,6 +891,7 @@ print(<span class="fn">"SIGNIFICANT"</span> <span class="kw">if</span> p &lt; 0.
       <span class="dtag">EXPORT</span>
       <strong>What it does:</strong> Extracts results from the browser for publications and presentations.
       <ul>
+        <li><strong>Complete ZIP bundle:</strong> one click packages the filtered/processed CSV, the summary report, and a PNG of every chart you've generated this session — ready to archive or share</li>
         <li><strong>Processed CSV:</strong> full dataset enriched with derived columns (Region, Mutagen_Category, Crop_Group, Decade) — ready for further analysis in Python, R or Excel</li>
         <li><strong>Summary Report:</strong> auto-generated plain-text — top crops, countries, regions, decadal distribution, top traits — paste-ready for a methods/results section</li>
         <li><strong>Chart downloads:</strong> every chart has ⬇ PNG (2× scale ≈ 300 dpi) and ⬇ SVG (vector, infinitely scalable) buttons — use SVG for journal figures</li>
@@ -897,10 +901,12 @@ print(<span class="fn">"SIGNIFICANT"</span> <span class="kw">if</span> p &lt; 0.
     <div class="card">
       <div class="ct">💾 Export &amp; Report</div>
       <div class="btn-row">
-        <button class="btn bp" onclick="expCSV()">📥 Download Processed CSV</button>
-        <button class="btn ba" onclick="genRep()">📋 Generate Summary Report</button>
-        <button class="btn bam" onclick="saveRep()">💾 Save Report (.txt)</button>
+        <button class="btn bp" onclick="exportZip()">🗜️ Download Everything (ZIP)</button>
+        <button class="btn ba" onclick="expCSV()">📥 Processed CSV</button>
+        <button class="btn bam" onclick="genRep()">📋 Generate Summary Report</button>
+        <button class="btn bo" onclick="saveRep()">💾 Save Report (.txt)</button>
       </div>
+      <div id="zip-status" style="font-size:12px;color:var(--muted);margin:4px 0 8px"></div>
       <div id="rep-box" class="rb" style="max-height:520px;font-size:12px">Click "Generate Summary Report"…</div>
     </div>
   </div>
@@ -915,7 +921,7 @@ const MODS=[
   {id:"crop",icon:"🌿",title:"Crop Explorer",desc:"Pick a single species and get a one-page dashboard: release timeline, country spread, mutagens, trait categories, explants, institutions, and that crop's Explant × Trait map.",tags:["Single species","Dashboard","Botanical search"]},
   {id:"desc",icon:"📊",title:"Dataset Overview",desc:"Frequency tables and charts for any column — crop, country, decade, mutagen type. Programme strength and last-decade vs previous-decade momentum.",tags:["Frequency","Momentum","Region filter"]},
   {id:"temporal",icon:"📅",title:"Temporal Analysis",desc:"Annual and decadal release trends, cumulative growth, multi-series comparison. Mann-Kendall significance test with Sen's slope.",tags:["Time series","Mann-Kendall","Sen's slope"]},
-  {id:"compare",icon:"🌍",title:"Cross-Table & Compare",desc:"Cross-tabulate any two categorical variables: heatmap, stacked %, grouped bar, sunburst. Reveals which combinations dominate or are absent.",tags:["Heatmap","Cross-tab","Sunburst"]},
+  {id:"compare",icon:"🌍",title:"Cross-Table & Compare",desc:"Cross-tabulate any two categorical variables: heatmap, stacked %, grouped bar, bubble grid. Reveals which combinations dominate or are absent.",tags:["Heatmap","Cross-tab","Bubble"]},
   {id:"mutagen",icon:"🧬",title:"Mutagen Analysis",desc:"Physical vs Chemical distribution, decadal technology shift, Crop × Mutagen and Country × Mutagen heatmaps, dose histogram.",tags:["Physical/Chemical","Ion beam","Dose"]},
   {id:"trait",icon:"🏷️",title:"Trait Analysis",desc:"Top improved traits, 7-category distribution, Crop × Trait heatmap, decade shift (Abiotic Stress rising post-2000), region comparison.",tags:["Breeding target","Category","Decade shift"]},
   {id:"explant",icon:"🧫",title:"Explant × Trait",desc:"Which tissue type (seed, callus, pollen…) yields which breeding outcome. Count + row-normalised % heatmaps and a Chi-Square independence test.",tags:["Explant","Normalised %","Chi-Square"]},
@@ -985,37 +991,6 @@ function closeSugg(id){setTimeout(()=>{const el=document.getElementById(id);if(e
 
 // ── AUTO-FETCH ────────────────────────────────────────────────────
 const MVD_CSV="https://mvd.iaea.org/Assets/Files/MVD_DB.csv";
-async function autoFetch(){
-  clearLog();document.getElementById("manual").style.display="none";setPB(.03);
-  document.getElementById("btn-auto").disabled=true;
-  const isHosted=location.protocol==="https:"&&!["localhost","127.0.0.1"].includes(location.hostname);
-  const strats=[];
-  if(isHosted)strats.push({name:"Server proxy",fn:()=>fetch("/api/mvd-data").then(r=>{if(!r.ok)throw new Error("HTTP "+r.status);return r.text();})});
-  strats.push(
-    {name:"allorigins.win",fn:async()=>{const r=await fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(MVD_CSV)}`,{signal:AbortSignal.timeout(18000)});const j=await r.json();if(!j.contents||j.contents.length<500)throw new Error("Empty");return j.contents;}},
-    {name:"corsproxy.io",fn:()=>fetch(`https://corsproxy.io/?${encodeURIComponent(MVD_CSV)}`,{signal:AbortSignal.timeout(18000)}).then(r=>{if(!r.ok)throw new Error("HTTP "+r.status);return r.text();})},
-    {name:"cors.sh",fn:()=>fetch(`https://proxy.cors.sh/${MVD_CSV}`,{headers:{"x-cors-api-key":"temp_demo"},signal:AbortSignal.timeout(18000)}).then(r=>{if(!r.ok)throw new Error("HTTP "+r.status);return r.text();})}
-  );
-  for(let i=0;i<strats.length;i++){
-    const s=strats[i];logStep(`⏳ ${s.name}…`,"fact");setPB(.1+i*.2);
-    try{
-      const text=await s.fn();
-      if(!text||text.length<1000||!text.includes(","))throw new Error("Not valid CSV");
-      clearLog();logStep(`✅ Fetched via ${s.name} — parsing…`,"fok");setPB(.9);
-      const p=Papa.parse(text,{header:true,skipEmptyLines:true,dynamicTyping:false});
-      if(!p.data||p.data.length<10)throw new Error("0 rows");
-      setPB(1);document.getElementById("btn-auto").disabled=false;
-      processData(p.data,p.meta.fields||[]);return;
-    }catch(e){
-      const el=document.getElementById("flog");const lines=el.innerHTML.split("<br>");
-      lines[lines.length-2]=`<span class="ferr">  ✗ ${s.name}: ${e.message}</span>`;
-      el.innerHTML=lines.join("<br>");await new Promise(r=>setTimeout(r,250));
-    }
-  }
-  setPB(0);logStep("⚠ All methods blocked. Use manual download below.","ferr");
-  document.getElementById("manual").style.display="block";
-  document.getElementById("btn-auto").disabled=false;
-}
 function loadCSV(e){const f=e.target.files[0];if(!f)return;clearLog();logStep(`Reading ${f.name}…`,"fact");setPB(.1);Papa.parse(f,{header:true,skipEmptyLines:true,dynamicTyping:false,complete:r=>{setPB(1);processData(r.data,r.meta.fields||[]);},error:e=>logStep("❌ "+e.message,"ferr")});}
 function dropFile(e){e.preventDefault();document.getElementById("uz").classList.remove("drag");const f=e.dataTransfer.files[0];if(!f)return;clearLog();logStep(`Loading ${f.name}…`,"fact");setPB(.1);Papa.parse(f,{header:true,skipEmptyLines:true,dynamicTyping:false,complete:r=>{setPB(1);processData(r.data,r.meta.fields||[]);},error:e=>logStep("❌ "+e.message,"ferr")});}
 function loadDemo(){clearLog();logStep("Generating demo dataset…","fact");setPB(.3);const crops=["Rice","Wheat","Barley","Soybean","Cotton","Sunflower","Tomato","Maize","Pea","Groundnut","Rapeseed","Banana","Sorghum","Chickpea","Sesame","Mungbean","Lentil","Oat"];const SPECIES={Rice:"Oryza sativa",Wheat:"Triticum aestivum",Barley:"Hordeum vulgare",Soybean:"Glycine max",Cotton:"Gossypium hirsutum",Sunflower:"Helianthus annuus",Tomato:"Solanum lycopersicum",Maize:"Zea mays",Pea:"Pisum sativum",Groundnut:"Arachis hypogaea",Rapeseed:"Brassica napus",Banana:"Musa acuminata",Sorghum:"Sorghum bicolor",Chickpea:"Cicer arietinum",Sesame:"Sesamum indicum",Mungbean:"Vigna radiata",Lentil:"Lens culinaris",Oat:"Avena sativa"};const countries=["Japan","China","India","Bangladesh","Vietnam","South Korea","Germany","France","Netherlands","Italy","Hungary","Bulgaria","USA","Brazil","Canada","Mexico","Egypt","Turkey","Iran","Morocco","Nigeria","Ethiopia","Kenya","South Africa","Australia"];const mutagens=["Gamma rays","X-rays","Gamma rays","Gamma rays","EMS","Sodium azide","Fast neutrons","Ion beam","Gamma rays","Carbon ions","Colchicine"];const traits=["Yield improvement","Disease resistance","Lodging tolerance","Early maturity","Drought tolerance","Protein content","Oil content","Salinity tolerance","Plant height reduction","Pest resistance","Quality improvement","Short culm","Wilt resistance"];const insts=["NIRS Japan","ICAR India","CAAS China","Wageningen UR","IRRI","USDA","IPK Germany","ICARDA","AfricaRice"];const rows=[];for(let i=0;i<2800;i++){const yr=1957+Math.floor(Math.pow(Math.random(),.7)*68);const t2=Math.random()>.65?"; "+traits[Math.floor(Math.random()*traits.length)]:"";const crop=crops[Math.floor(Math.random()*crops.length)];rows.push({Variety_Name:"Var-"+String(i+1).padStart(4,"0"),Crop:crop,Species:SPECIES[crop]||"",Country:countries[Math.floor(Math.random()*countries.length)],Year_of_Release:String(yr),Mutagen_Type:mutagens[Math.floor(Math.random()*mutagens.length)],Mutagen_Dose:Math.random()>.4?String(Math.round(Math.random()*400+50)):"",Treated_Explant:["Seed","Pollen","Callus","Cutting","Bulb"][Math.floor(Math.random()*5)],Improved_Trait:traits[Math.floor(Math.random()*traits.length)]+t2,Breeding_Institution:insts[Math.floor(Math.random()*insts.length)]});}processData(rows,Object.keys(rows[0]));setPB(1);logStep("✅ Demo data ready — all 9 modules available.","fok");}
@@ -1037,7 +1012,7 @@ async function loadRepoCSV(silent){
     if(btn)btn.disabled=false;return true;
   }catch(e){
     if(btn)btn.disabled=false;
-    if(!silent){setPB(0);logStep("⚠ No bundled MVD_DB.csv next to the app ("+e.message+"). Use “Load Local CSV”, “Fetch Latest”, or “Demo Data”.","ferr");}
+    if(!silent){setPB(0);logStep("⚠ No bundled MVD_DB.csv next to the app ("+e.message+"). Use “Load Local CSV” or “Demo Data”.","ferr");}
     return false;
   }
 }
@@ -1099,15 +1074,24 @@ function filt(o={}){let r=G.rows;if(o.country)r=r.filter(x=>(x.Country||"").toLo
 function chk(){if(!G.rows.length){alert("Please load data first (Overview tab).");return false;}return true;}
 function splitT(rows){const a=[];rows.forEach(r=>{if(!r.Improved_Trait)return;r.Improved_Trait.split(/[,;\/&+]+/).forEach(t=>{t=t.trim().toLowerCase().replace(/\s+/g," ");if(t.length>2)a.push(t);});});return a;}
 function catT(t){t=t.toLowerCase();if(/yield|grain|biomass|producti/.test(t))return"Yield";if(/disease|resist|blight|rust|smut|mosaic|wilt|blast/.test(t))return"Disease Resist.";if(/drought|salinity|salt|flood|stress|toleran|water/.test(t))return"Abiotic Stress";if(/matur|early|phenol|harvest|days/.test(t))return"Maturity";if(/quality|protein|oil|nutri|vitamin|flour|starch/.test(t))return"Quality";if(/lodg|dwarf|height|compact|short|archit|stem/.test(t))return"Plant Arch.";if(/pest|insect|aphid|nematode/.test(t))return"Pest Resist.";return"Other";}
-function dlC(id,n,f){const el=document.getElementById(id);if(el)Plotly.downloadImage(el,{format:f,filename:"mvd_"+n,scale:2});}
+function dlC(id,n,f){const el=document.getElementById(id);if(!el)return;
+  // Read the chart's actual rendered size so SVG/PNG export at full scale (not clipped).
+  let w=el.clientWidth||el.offsetWidth||900, h=el.clientHeight||el.offsetHeight||500;
+  try{const ld=el._fullLayout;if(ld&&ld.width)w=ld.width;if(ld&&ld.height)h=ld.height;}catch(e){}
+  Plotly.downloadImage(el,{format:f,filename:"mvd_"+n,width:Math.round(w),height:Math.round(h),scale:f==="png"?2:1});}
 // ── RESET VIEW ────────────────────────────────────────────────────
-// Record every render so "Reset view" can replay it (clears legend isolation / zoom)
-// without re-querying. Wraps Plotly.newPlot once; all existing call sites are untouched.
+// Record a DEEP CLONE of every render so "Reset view" fully restores the chart
+// (clears legend isolation, slice pull, zoom). Cloning is essential: Plotly mutates
+// the trace/layout objects in place during render, so replaying the same references
+// reproduces the broken state. Wraps Plotly.newPlot once; call sites are untouched.
 const __lastPlot={};
+function __clone(o){try{return structuredClone(o);}catch(e){try{return JSON.parse(JSON.stringify(o));}catch(e2){return o;}}}
 (function(){const _np=Plotly.newPlot.bind(Plotly);Plotly.newPlot=function(id,traces,layout,config){
-  try{const key=(typeof id==="string")?id:(id&&id.id);if(key)__lastPlot[key]={traces,layout,config};}catch(e){}
+  try{const key=(typeof id==="string")?id:(id&&id.id);if(key)__lastPlot[key]={traces:__clone(traces),layout:__clone(layout),config:__clone(config)};}catch(e){}
   return _np(id,traces,layout,config);};})();
-function resetView(id){const r=__lastPlot[id];if(!r){return;}Plotly.newPlot(id,r.traces,r.layout,r.config);}
+function resetView(id){const r=__lastPlot[id];const el=document.getElementById(id);if(!r||!el){return;}
+  try{Plotly.purge(el);}catch(e){}
+  Plotly.newPlot(id,__clone(r.traces),__clone(r.layout),__clone(r.config));}
 function tbl(rows,cols){return`<table><thead><tr>${cols.map(c=>`<th>${c}</th>`).join("")}</tr></thead><tbody>${rows.map(r=>`<tr>${cols.map(c=>`<td>${r[c]!==undefined?r[c]:""}</td>`).join("")}</tr>`).join("")}</tbody></table>`;}
 function MK(s){const n=s.length;if(n<4)return null;let S=0;for(let i=0;i<n-1;i++)for(let j=i+1;j<n;j++){const d=s[j]-s[i];if(d>0)S++;else if(d<0)S--;}const vs=n*(n-1)*(2*n+5)/18;const Z=S===0?0:(S>0?(S-1)/Math.sqrt(vs):(S+1)/Math.sqrt(vs));const p=2*(1-nCDF(Math.abs(Z)));const tau=S/(n*(n-1)/2);const sl=[];for(let i=0;i<n-1;i++)for(let j=i+1;j<n;j++)sl.push((s[j]-s[i])/(j-i));sl.sort((a,b)=>a-b);return{S,Z,p,tau,slope:sl[Math.floor(sl.length/2)],significant:p<.05,trend:p<.05?(S>0?"INCREASING ↑":"DECREASING ↓"):"NO TREND →"};}
 function nCDF(x){const a1=.254829592,a2=-.284496736,a3=1.421413741,a4=-1.453152027,a5=1.061405429,p=.3275911;x=Math.abs(x)/Math.sqrt(2);const t=1/(1+p*x);return .5*(1+(x<0?-1:1)*(1-(((((a5*t+a4)*t)+a3)*t+a2)*t+a1)*t*Math.exp(-x*x)));}
@@ -1123,14 +1107,54 @@ function runDesc(){if(!chk())return;const col=document.getElementById("d-col").v
 // ── TEMPORAL ─────────────────────────────────────────────────────
 function getTR(){const fc=document.getElementById("t-fcol").value,fv=document.getElementById("t-fval").value.trim(),reg=document.getElementById("t-region").value;return filt({fcol:fc||"",fval:fv||"",region:reg});}
 function runTemporal(){if(!chk())return;const rows=getTR(),view=document.getElementById("t-view").value;const fc=document.getElementById("t-fcol").value,fv=document.getElementById("t-fval").value.trim(),reg=document.getElementById("t-region").value;const lbl=(fc&&fv)?`${fc}: "${fv}"`:(reg?`Region: ${reg}`:"All MVD");const ann=annArr(rows),dec=decArr(rows);if(!ann.length){alert("No year data.");return;}let traces=[],layout={};if(view==="annual"){traces=[{type:"bar",x:ann.map(x=>x.year),y:ann.map(x=>x.count),marker:{color:"#005A8E"}}];layout=PL(`Annual Releases — ${lbl}`,{height:440,xaxis:{title:"Year"},yaxis:{title:"Varieties"},margin:{l:65,r:20,t:52,b:65}});}else if(view==="decade"){traces=[{type:"bar",x:dec.map(x=>x.label),y:dec.map(x=>x.count),marker:{color:dec.map((_,i)=>PAL[i%PAL.length])}}];layout=PL(`Decadal Distribution — ${lbl}`,{height:440,xaxis:{title:"Decade"},yaxis:{title:"Varieties"},margin:{l:65,r:20,t:52,b:85}});}else if(view==="both"){traces=[{type:"bar",x:ann.map(x=>x.year),y:ann.map(x=>x.count),name:"Annual",marker:{color:"#005A8E"},yaxis:"y"},{type:"scatter",x:ann.map(x=>x.year),y:ann.map(x=>x.cum),name:"Cumulative",line:{color:"#E07B00",width:2.5},yaxis:"y2"}];layout={...PL(`Releases & Cumulative — ${lbl}`),height:440,yaxis:{title:"Annual",gridcolor:"#243F5C"},yaxis2:{title:"Cumulative",overlaying:"y",side:"right"},legend:{x:.02,y:.98,font:{color:"#E4EEF8"}},margin:{l:75,r:75,t:52,b:65}};}else{const mc=document.getElementById("t-mcol").value;const cats=vc(rows,mc,6).map(x=>x.key);traces=cats.map((c,i)=>{const aa=annArr(rows.filter(r=>r[mc]===c));return{type:"scatter",mode:"lines",name:c,x:aa.map(x=>x.year),y:aa.map(x=>x.count),line:{color:PAL[i%PAL.length],width:2}};});layout=PL(`Multi-Series by ${mc} — ${lbl}`,{height:440,xaxis:{title:"Year"},yaxis:{title:"Varieties"},legend:{font:{color:"#E4EEF8"}},margin:{l:65,r:20,t:52,b:65}});}Plotly.newPlot("t-chart",traces,layout,PC);document.getElementById("mk-res").style.display="none";setSt(`Temporal: ${lbl} · ${rows.filter(r=>r._year).length.toLocaleString()} records`);}
-function runMK(){if(!chk())return;const ann=annArr(getTR());if(ann.length<4){alert("Need ≥4 years.");return;}const res=MK(ann.map(x=>x.count));const el=document.getElementById("mk-res");el.style.display="block";el.innerHTML=`${"─".repeat(52)}\n  Mann-Kendall Trend Test  |  N = ${ann.length} years  |  Total = ${ann.reduce((s,x)=>s+x.count,0).toLocaleString()}\n${"─".repeat(52)}\n  Trend direction : ${res.trend}\n  Kendall S       : ${res.S}\n  Z score         : ${res.Z.toFixed(4)}\n  Kendall's τ     : ${res.tau.toFixed(4)}\n  p-value         : ${res.p.toFixed(6)}\n  Sen's Slope     : ${res.slope.toFixed(3)} varieties / year\n${"─".repeat(52)}\n  <span class="${res.significant?"ok":"warn"}">${res.significant?"✅ SIGNIFICANT (p < 0.05)":"⚠  NOT SIGNIFICANT (p ≥ 0.05)"}</span>`;setSt(`Mann-Kendall: ${res.trend} · p=${res.p.toFixed(4)}`);}
+// Plain-language verdict + sparse-data caution shared by both Mann-Kendall views
+function mkVerdict(res,nYears,total){
+  const dir=res.significant?(res.S>0?"rising":"falling"):"no clear";
+  const pcls=res.significant?"ok":"warn";
+  const pline=`  p-value : <span class="pval ${pcls}">${res.p.toFixed(4)}</span>  ${res.significant?"(< 0.05)":"(≥ 0.05)"}`;
+  let verdict;
+  if(res.significant){
+    verdict=`<span class="verdict ${pcls}">→ Releases show a statistically significant ${res.S>0?"upward":"downward"} trend over time (p = ${res.p.toFixed(3)}). On average ${res.slope>0?"+":""}${res.slope.toFixed(2)} varieties per year.</span>`;
+  }else{
+    verdict=`<span class="verdict warn">→ No statistically significant trend: releases neither rose nor fell consistently over time (p = ${res.p.toFixed(3)}, so the change is within what chance would produce).</span>`;
+  }
+  let sparse="";
+  if(total<30||nYears<8){
+    sparse=`<span class="sparse">⚠ Only ${total.toLocaleString()} records across ${nYears} years — quite sparse, so the test has little power to detect a trend even if one exists. Widen the filter (e.g. a whole crop or region) for a more reliable result.</span>`;
+  }
+  return {pline,verdict,sparse};
+}
+function chiVerdict(chi2,p,dof,minE,nounA,nounB){
+  const pcls=p<.05?"ok":"warn";
+  const pline=`  p-value : <span class="pval ${pcls}">${p.toFixed(4)}</span>  ${p<.05?"(< 0.05)":"(≥ 0.05)"}`;
+  const verdict=p<.05
+    ? `<span class="verdict ok">→ ${nounA} and ${nounB} are associated — the combinations differ from what independence would predict (p = ${p.toFixed(3)}).</span>`
+    : `<span class="verdict warn">→ No significant association: ${nounA} and ${nounB} look independent — differences are within chance (p = ${p.toFixed(3)}).</span>`;
+  const sparse=minE<5?`<span class="sparse">⚠ Smallest expected cell is ${minE.toFixed(1)} (< 5). The test is less reliable here — merge rare categories or widen the filter.</span>`:"";
+  return {pline,verdict,sparse};
+}
+function runMK(){if(!chk())return;const ann=annArr(getTR());if(ann.length<4){alert("Need ≥4 years of data for a Mann-Kendall test.");return;}const res=MK(ann.map(x=>x.count));const total=ann.reduce((s,x)=>s+x.count,0);const v=mkVerdict(res,ann.length,total);const el=document.getElementById("mk-res");el.style.display="block";
+  el.innerHTML=`${"─".repeat(52)}\n  Mann-Kendall Trend Test  |  ${ann.length} years  |  ${total.toLocaleString()} varieties\n${"─".repeat(52)}\n${v.pline}\n  Sen's slope : ${res.slope.toFixed(3)} varieties / year\n  Kendall's τ : ${res.tau.toFixed(4)}     S : ${res.S}     Z : ${res.Z.toFixed(3)}\n${"─".repeat(52)}\n${v.verdict}${v.sparse}`;
+  setSt(`Mann-Kendall: ${res.significant?(res.S>0?"increasing":"decreasing"):"no trend"} · p=${res.p.toFixed(4)}`);}
 
 // ── COMPARE ──────────────────────────────────────────────────────
 function getCT(){const reg=document.getElementById("c-reg").value,rows=filt({region:reg});const rc=document.getElementById("c-row").value,cc=document.getElementById("c-col").value;const tr=parseInt(document.getElementById("c-nr").value)||12,tc=parseInt(document.getElementById("c-nc").value)||8;const rk=vc(rows,rc,tr).map(x=>x.key),ck=vc(rows,cc,tc).map(x=>x.key);const ct={};rk.forEach(r=>{ct[r]={};ck.forEach(c=>ct[r][c]=0);});rows.forEach(r=>{if(ct[r[rc]]&&ct[r[rc]][r[cc]]!==undefined)ct[r[rc]][r[cc]]++;});return{rk,ck,ct,rc,cc};}
 function runHeat(){if(!chk())return;const{rk,ck,ct,rc,cc}=getCT();Plotly.newPlot("c-chart",[{type:"heatmap",x:ck,y:rk,z:rk.map(r=>ck.map(c=>ct[r][c]||0)),colorscale:[[0,"#122336"],[.4,"#003F6B"],[1,"#00A19A"]],texttemplate:"%{z}",textfont:{size:10,color:"#E4EEF8"},hovertemplate:`${rc}: %{y}<br>${cc}: %{x}<br>Count: %{z}<extra></extra>`}],{...PL(`${rc} × ${cc}`),height:Math.max(420,rk.length*32+120),margin:{l:165,r:20,t:52,b:115},xaxis:{tickangle:-35},yaxis:{automargin:true}},PC);document.getElementById("c-tbl").style.display="none";}
 function runStack(){if(!chk())return;const{rk,ck,ct,rc,cc}=getCT();const tots=rk.map(r=>ck.reduce((s,c)=>s+(ct[r][c]||0),0));Plotly.newPlot("c-chart",ck.map((c,i)=>({type:"bar",name:c,x:rk,y:rk.map((r,ri)=>tots[ri]?((ct[r][c]||0)/tots[ri]*100):0),marker:{color:PAL[i%PAL.length]},hovertemplate:`${c}: %{y:.1f}%<extra></extra>`})),{...PL(`${cc} % by ${rc}`),barmode:"stack",xaxis:{tickangle:-35,automargin:true},yaxis:{title:"%"},legend:{font:{color:"#E4EEF8",size:10}},height:460,margin:{l:65,r:20,t:52,b:115}},PC);document.getElementById("c-tbl").style.display="none";}
 function runGroup(){if(!chk())return;const{rk,ck,ct,rc,cc}=getCT();Plotly.newPlot("c-chart",ck.map((c,i)=>({type:"bar",name:c,x:rk,y:rk.map(r=>ct[r][c]||0),marker:{color:PAL[i%PAL.length]},hovertemplate:`${c}: %{y:,}<extra></extra>`})),{...PL(`${cc} counts by ${rc}`),barmode:"group",xaxis:{tickangle:-35,automargin:true},yaxis:{title:"Varieties"},legend:{font:{color:"#E4EEF8",size:10}},height:460,margin:{l:65,r:20,t:52,b:115}},PC);document.getElementById("c-tbl").style.display="none";}
-function runSun(){if(!chk())return;const{rk,ck,ct,rc,cc}=getCT();const lb=["All"],pa=[""],va=[G.rows.length];rk.forEach(r=>{const t=ck.reduce((s,c)=>s+(ct[r][c]||0),0);lb.push(r);pa.push("All");va.push(t);ck.forEach(c=>{if(ct[r][c]){lb.push(r+"/"+c);pa.push(r);va.push(ct[r][c]);}});});Plotly.newPlot("c-chart",[{type:"sunburst",labels:lb,parents:pa,values:va,branchvalues:"total",textinfo:"label+percent entry",marker:{colorscale:[[0,"#003F6B"],[1,"#00A19A"]]}}],{...PL(`${rc} → ${cc}`),height:520,margin:{l:10,r:10,t:52,b:10}},PC);document.getElementById("c-tbl").style.display="none";}
+function runBubble(){if(!chk())return;const{rk,ck,ct,rc,cc}=getCT();
+  // Bubble grid: x = column category, y = row category, size & colour = count.
+  // Far more readable than a sunburst for a two-variable cross-tab.
+  const xs=[],ys=[],sz=[],cl=[],tx=[];let mx=0;
+  rk.forEach(r=>ck.forEach(c=>{const v=ct[r][c]||0;if(v>mx)mx=v;}));
+  rk.forEach(r=>ck.forEach(c=>{const v=ct[r][c]||0;if(v>0){xs.push(c);ys.push(r);sz.push(v);cl.push(v);tx.push(v);}}));
+  const ref=2.0*mx/(38*38); // sizeref so the largest bubble ≈38px
+  Plotly.newPlot("c-chart",[{type:"scatter",mode:"markers",x:xs,y:ys,text:tx,
+    marker:{size:sz,sizemode:"area",sizeref:ref,sizemin:4,color:cl,colorscale:[[0,"#1B4B6B"],[.5,"#0E7C9B"],[1,"#00A19A"]],showscale:true,colorbar:{title:{text:"Count",font:{color:"#E4EEF8",size:11}},tickfont:{color:"#9FB8CE",size:10}},line:{color:"#0D1B2A",width:1}},
+    hovertemplate:"%{y} × %{x}<br>Count: %{text}<extra></extra>"}],
+    {...PL(`${rc} × ${cc} — bubble grid (size = count)`),height:Math.max(360,rk.length*34+140),
+     margin:{l:160,r:30,t:52,b:120},xaxis:{tickangle:-35,automargin:true,gridcolor:"#1C3350",type:"category"},yaxis:{automargin:true,gridcolor:"#1C3350",type:"category"}},PC);
+  document.getElementById("c-tbl").style.display="none";setSt(`Bubble grid: ${rc} × ${cc}`);}
 function showCT(){if(!chk())return;const{rk,ck,ct,rc,cc}=getCT();document.getElementById("c-tbl").style.display="block";document.getElementById("c-tbl").innerHTML=tbl(rk.map(r=>{const o={[rc]:r};let t=0;ck.forEach(c=>{o[c]=ct[r][c]||0;t+=o[c];});o.Total=t;return o;}),[rc,...ck,"Total"]);}
 
 // ── MUTAGEN ──────────────────────────────────────────────────────
@@ -1176,8 +1200,8 @@ function trDevel(){
 }
 
 // ── ADVANCED ─────────────────────────────────────────────────────
-function runChi(){if(!chk())return;const v1=document.getElementById("chi1").value,v2=document.getElementById("chi2").value,topN=parseInt(document.getElementById("chi-n").value)||10;const t1=vc(G.rows,v1,topN).map(x=>x.key),t2=vc(G.rows,v2,topN).map(x=>x.key);const rows=G.rows.filter(r=>t1.includes(r[v1])&&t2.includes(r[v2]));if(!rows.length){alert("No data.");return;}const obs=t1.map(a=>t2.map(b=>rows.filter(r=>r[v1]===a&&r[v2]===b).length));const rT=obs.map(r=>r.reduce((s,v)=>s+v,0));const cT=t2.map((_,j)=>obs.reduce((s,r)=>s+r[j],0));const N=rows.length;const exp=t1.map((_,i)=>t2.map((_,j)=>rT[i]*cT[j]/N));let chi2=0,minE=Infinity;obs.forEach((r,i)=>r.forEach((o,j)=>{const e=exp[i][j];if(e<minE)minE=e;if(e>0)chi2+=(o-e)**2/e;}));const dof=(t1.length-1)*(t2.length-1);const p=chiP(chi2,dof);document.getElementById("chi-res").innerHTML=`${"─".repeat(52)}\n  Chi-Square Independence Test: ${v1} × ${v2}\n  N = ${N.toLocaleString()}\n${"─".repeat(52)}\n  χ² statistic       : ${chi2.toFixed(4)}\n  Degrees of freedom : ${dof}\n  p-value            : ${p.toFixed(6)}\n  Min expected cell  : ${minE.toFixed(2)}\n${"─".repeat(52)}\n  <span class="${p<.05?"ok":"warn"}">${p<.05?"✅ SIGNIFICANT — NOT independent (p < 0.05)":"⚠  NOT SIGNIFICANT (p ≥ 0.05)"}</span>${minE<5?"\n\n  ⚠  Min expected < 5 — consider merging rare categories":""}`;Plotly.newPlot("chi-chart",[{type:"heatmap",x:t2,y:t1,z:obs,colorscale:[[0,"#122336"],[.5,"#003F6B"],[1,"#005A8E"]],texttemplate:"%{z}",textfont:{size:10,color:"#E4EEF8"}}],{...PL(`${v1} × ${v2}  (χ²=${chi2.toFixed(2)}, p=${p.toFixed(4)})`),height:Math.max(300,t1.length*28+100),margin:{l:165,r:20,t:52,b:115},xaxis:{tickangle:-35},yaxis:{automargin:true}},PC);setSt(`χ²=${chi2.toFixed(2)}, p=${p.toFixed(4)}, dof=${dof}`);}
-function runMK2(){if(!chk())return;const fc=document.getElementById("mk2-col").value,fv=document.getElementById("mk2-val").value.trim(),y1=parseInt(document.getElementById("mk2-y1").value)||1960,y2=parseInt(document.getElementById("mk2-y2").value)||2024;const rows=filt({fcol:fc||"",fval:fv||""}).filter(r=>r._year&&r._year>=y1&&r._year<=y2);const ann=annArr(rows);if(ann.length<4){document.getElementById("mk2-res").textContent="⚠ Need at least 4 years.";return;}const res=MK(ann.map(x=>x.count));const lbl=(fc&&fv)?`${fc}: "${fv}"`:`All (${y1}–${y2})`;document.getElementById("mk2-res").innerHTML=`${"─".repeat(52)}\n  Mann-Kendall — ${lbl}  |  N = ${ann.length} years\n${"─".repeat(52)}\n  Trend direction : ${res.trend}\n  Kendall's τ     : ${res.tau.toFixed(4)}\n  p-value         : ${res.p.toFixed(6)}\n  Sen's Slope     : ${res.slope.toFixed(3)} varieties / year\n${"─".repeat(52)}\n  <span class="${res.significant?"ok":"warn"}">${res.significant?"✅ SIGNIFICANT (p < 0.05)":"⚠  NOT SIGNIFICANT (p ≥ 0.05)"}</span>`;const yrs=ann.map(x=>x.year),cnts=ann.map(x=>x.count),cums=ann.map(x=>x.cum);Plotly.newPlot("mk2-chart",[{type:"bar",x:yrs,y:cnts,name:"Annual",marker:{color:"#005A8E"},yaxis:"y"},{type:"scatter",x:yrs,y:cnts.map((_,i)=>cnts[0]+res.slope*i),name:"Sen's slope",line:{color:"#E07B00",width:2,dash:"dash"},yaxis:"y"},{type:"scatter",x:yrs,y:cums,name:"Cumulative",line:{color:"#00A19A",width:2},yaxis:"y2"}],{...PL(`${lbl}`),height:380,yaxis:{title:"Annual",gridcolor:"#243F5C"},yaxis2:{title:"Cumulative",overlaying:"y",side:"right"},legend:{x:.02,y:.98,font:{color:"#E4EEF8",size:10}},margin:{l:65,r:80,t:52,b:65}},PC);setSt(`MK: ${res.trend} · p=${res.p.toFixed(4)}`);}
+function runChi(){if(!chk())return;const v1=document.getElementById("chi1").value,v2=document.getElementById("chi2").value,topN=parseInt(document.getElementById("chi-n").value)||10;const t1=vc(G.rows,v1,topN).map(x=>x.key),t2=vc(G.rows,v2,topN).map(x=>x.key);const rows=G.rows.filter(r=>t1.includes(r[v1])&&t2.includes(r[v2]));if(!rows.length){alert("No data.");return;}const obs=t1.map(a=>t2.map(b=>rows.filter(r=>r[v1]===a&&r[v2]===b).length));const rT=obs.map(r=>r.reduce((s,v)=>s+v,0));const cT=t2.map((_,j)=>obs.reduce((s,r)=>s+r[j],0));const N=rows.length;const exp=t1.map((_,i)=>t2.map((_,j)=>rT[i]*cT[j]/N));let chi2=0,minE=Infinity;obs.forEach((r,i)=>r.forEach((o,j)=>{const e=exp[i][j];if(e<minE)minE=e;if(e>0)chi2+=(o-e)**2/e;}));const dof=(t1.length-1)*(t2.length-1);const p=chiP(chi2,dof);const cv=chiVerdict(chi2,p,dof,minE,v1,v2);document.getElementById("chi-res").innerHTML=`${"─".repeat(52)}\n  Chi-Square Independence Test: ${v1} × ${v2}\n  N = ${N.toLocaleString()}\n${"─".repeat(52)}\n${cv.pline}\n  χ² : ${chi2.toFixed(3)}     df : ${dof}     min expected : ${minE.toFixed(2)}\n${"─".repeat(52)}\n${cv.verdict}${cv.sparse}`;Plotly.newPlot("chi-chart",[{type:"heatmap",x:t2,y:t1,z:obs,colorscale:[[0,"#122336"],[.5,"#003F6B"],[1,"#005A8E"]],texttemplate:"%{z}",textfont:{size:10,color:"#E4EEF8"}}],{...PL(`${v1} × ${v2}  (χ²=${chi2.toFixed(2)}, p=${p.toFixed(4)})`),height:Math.max(300,t1.length*28+100),margin:{l:165,r:20,t:52,b:115},xaxis:{tickangle:-35},yaxis:{automargin:true}},PC);setSt(`χ²=${chi2.toFixed(2)}, p=${p.toFixed(4)}, dof=${dof}`);}
+function runMK2(){if(!chk())return;const fc=document.getElementById("mk2-col").value,fv=document.getElementById("mk2-val").value.trim(),y1=parseInt(document.getElementById("mk2-y1").value)||1960,y2=parseInt(document.getElementById("mk2-y2").value)||2024;const rows=filt({fcol:fc||"",fval:fv||""}).filter(r=>r._year&&r._year>=y1&&r._year<=y2);const ann=annArr(rows);if(ann.length<4){document.getElementById("mk2-res").textContent="⚠ Need at least 4 years.";return;}const res=MK(ann.map(x=>x.count));const total=ann.reduce((s,x)=>s+x.count,0);const lbl=(fc&&fv)?`${fc}: "${fv}"`:`All (${y1}–${y2})`;const v=mkVerdict(res,ann.length,total);document.getElementById("mk2-res").innerHTML=`${"─".repeat(52)}\n  Mann-Kendall — ${lbl}  |  ${ann.length} years  |  ${total.toLocaleString()} varieties\n${"─".repeat(52)}\n${v.pline}\n  Sen's slope : ${res.slope.toFixed(3)} varieties / year\n  Kendall's τ : ${res.tau.toFixed(4)}\n${"─".repeat(52)}\n${v.verdict}${v.sparse}`;const yrs=ann.map(x=>x.year),cnts=ann.map(x=>x.count),cums=ann.map(x=>x.cum);Plotly.newPlot("mk2-chart",[{type:"bar",x:yrs,y:cnts,name:"Annual",marker:{color:"#005A8E"},yaxis:"y"},{type:"scatter",x:yrs,y:cnts.map((_,i)=>cnts[0]+res.slope*i),name:"Sen's slope",line:{color:"#E07B00",width:2,dash:"dash"},yaxis:"y"},{type:"scatter",x:yrs,y:cums,name:"Cumulative",line:{color:"#00A19A",width:2},yaxis:"y2"}],{...PL(`${lbl}`),height:380,yaxis:{title:"Annual",gridcolor:"#243F5C"},yaxis2:{title:"Cumulative",overlaying:"y",side:"right"},legend:{x:.02,y:.98,font:{color:"#E4EEF8",size:10}},margin:{l:65,r:80,t:52,b:65}},PC);setSt(`MK: ${res.trend} · p=${res.p.toFixed(4)}`);}
 function runNS(){if(!chk())return;const col=document.getElementById("ns-col").value,reg=document.getElementById("ns-reg").value;const rows=filt({crop:document.getElementById("ns-crop").value.trim(),region:reg});const vals=rows.map(r=>parseFloat(r[col])).filter(v=>!isNaN(v));if(!vals.length){alert("No numeric data.");return;}vals.sort((a,b)=>a-b);const n=vals.length,mean=vals.reduce((s,v)=>s+v,0)/n,med=n%2===0?(vals[n/2-1]+vals[n/2])/2:vals[Math.floor(n/2)],std=Math.sqrt(vals.reduce((s,v)=>s+(v-mean)**2,0)/(n-1)),q1=vals[Math.floor(n*.25)],q3=vals[Math.floor(n*.75)];document.getElementById("ns-tbl").innerHTML=tbl([["N",n.toLocaleString()],["Mean",mean.toFixed(2)],["Median",med.toFixed(2)],["Std Dev",std.toFixed(2)],["Min",vals[0]],["Max",vals[n-1]],["Q1",q1],["Q3",q3],["IQR",(q3-q1).toFixed(2)],["Skewness",(3*(mean-med)/std).toFixed(4)]].map(([k,v])=>({Statistic:k,Value:v})),["Statistic","Value"]);setSt(`Descriptive: ${col} · n=${n.toLocaleString()}`);}
 function runHist(){if(!chk())return;const col=document.getElementById("ns-col").value,reg=document.getElementById("ns-reg").value;const rows=filt({crop:document.getElementById("ns-crop").value.trim(),region:reg});const vals=rows.map(r=>parseFloat(r[col])).filter(v=>!isNaN(v));if(!vals.length){alert("No numeric data.");return;}const mean=vals.reduce((s,v)=>s+v,0)/vals.length;Plotly.newPlot("ns-chart",[{type:"histogram",x:vals,nbinsx:40,marker:{color:"#005A8E",line:{color:"#00A19A",width:.5}}},{type:"scatter",mode:"lines",x:[mean,mean],y:[0,vals.length/5],line:{color:"#E07B00",width:2,dash:"dash"},name:`Mean=${mean.toFixed(1)}`}],{...PL(`${col} Distribution`),height:370,margin:{l:65,r:20,t:52,b:65},xaxis:{title:col},yaxis:{title:"Frequency"},legend:{font:{color:"#E4EEF8",size:10}}},PC);}
 function runBox(){if(!chk())return;const col=document.getElementById("ns-col").value;const regions=[...new Set(G.rows.map(r=>r.Region).filter(x=>x&&x!=="Unknown"&&x!=="Other"))].sort();Plotly.newPlot("ns-chart",regions.map((r,i)=>({type:"box",name:r,y:G.rows.filter(x=>x.Region===r).map(x=>parseFloat(x[col])).filter(v=>!isNaN(v)),marker:{color:PAL[i%PAL.length]},boxmean:true})),{...PL(`${col} by Region`),height:390,yaxis:{title:col},showlegend:false,margin:{l:65,r:20,t:52,b:85},xaxis:{automargin:true}},PC);}
@@ -1348,7 +1372,7 @@ function exChi(){
   const dof=(exps.length-1)*(useCats.length-1);
   const p=chiP(chi2,dof);
   const el=document.getElementById("ex-res");el.style.display="block";
-  el.innerHTML=`${"─".repeat(52)}\n  Chi-Square: Treated_Explant × Trait Category\n  Filter: ${exLbl()}   |   N = ${N.toLocaleString()} trait assignments\n  ${exps.length} explants × ${useCats.length} trait categories\n${"─".repeat(52)}\n  χ² statistic       : ${chi2.toFixed(4)}\n  Degrees of freedom : ${dof}\n  p-value            : ${p.toFixed(6)}\n  Min expected cell  : ${minE.toFixed(2)}\n${"─".repeat(52)}\n  <span class="${p<.05?"ok":"warn"}">${p<.05?"✅ SIGNIFICANT — explant and trait are NOT independent (p < 0.05)":"⚠  NOT SIGNIFICANT (p ≥ 0.05)"}</span>${minE<5?"\n\n  ⚠  Min expected < 5 — interpret with caution; consider merging rare explants/traits or widening the filter.":""}`;
+  const cv=chiVerdict(chi2,p,dof,minE,"explant","trait");el.innerHTML=`${"─".repeat(52)}\n  Chi-Square: Treated Explant × Trait Category\n  Filter: ${exLbl()}   |   N = ${N.toLocaleString()} trait assignments\n  ${exps.length} explants × ${useCats.length} trait categories\n${"─".repeat(52)}\n${cv.pline}\n  χ² : ${chi2.toFixed(3)}     df : ${dof}     min expected : ${minE.toFixed(2)}\n${"─".repeat(52)}\n${cv.verdict}${cv.sparse}`;
   // show the count heatmap with the stat in the title
   Plotly.newPlot("ex-chart",[{type:"heatmap",x:useCats,y:exps,z:obs,colorscale:[[0,"#122336"],[.5,"#003F6B"],[1,"#005A8E"]],texttemplate:"%{z}",textfont:{size:11,color:"#E4EEF8"}}],{...PL(`Explant × Trait  (χ²=${chi2.toFixed(2)}, p=${p.toFixed(4)})`),height:Math.max(320,exps.length*34+130),margin:{l:130,r:20,t:52,b:115},xaxis:{tickangle:-35},yaxis:{automargin:true}},PC);
   document.getElementById("ex-tbl").style.display="none";
@@ -1365,6 +1389,43 @@ function exTbl(){
 function expCSV(){if(!G.rows.length){alert("Load data first.");return;}const cols=G.cols.filter(c=>!c.startsWith("_"));const csv=[cols.join(","),...G.rows.map(r=>cols.map(c=>`"${(r[c]||"").replace(/"/g,'""')}"`).join(","))].join("\n");const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));a.download="mvd_processed.csv";a.click();}
 function genRep(){if(!G.rows.length){alert("Load data first.");return;}const r=G.rows,n=r.length,years=r.map(x=>x._year).filter(Boolean);const lines=["=".repeat(60),"  MVD Analysis Suite — Summary Report",`  Generated: ${new Date().toLocaleString()}`,"  Data: IAEA Mutant Variety Database (mvd.iaea.org)","=".repeat(60),"","── OVERVIEW ─────────────────────────────────────────────",`  Total varieties : ${n.toLocaleString()}`,`  Crop species    : ${[...new Set(r.map(x=>x.Crop).filter(Boolean))].length.toLocaleString()}`,`  Countries       : ${[...new Set(r.map(x=>x.Country).filter(Boolean))].length.toLocaleString()}`,`  Regions         : ${[...new Set(r.map(x=>x.Region).filter(x=>x&&x!=="Unknown"))].length}`,`  Year range      : ${years.length?Math.min(...years)+"–"+Math.max(...years):"—"}`,`  Missing year %  : ${(r.filter(x=>!x._year).length/n*100).toFixed(1)}%`,"","── TOP 10 CROPS ────────────────────────────────────────"];vc(r,"Crop",10).forEach(({key,count},i)=>lines.push(`  ${String(i+1).padStart(2,"0")}. ${key.padEnd(34)}${String(count).padStart(6)}  (${(count/n*100).toFixed(1)}%)`));lines.push("","── TOP 10 COUNTRIES ────────────────────────────────────");vc(r,"Country",10).forEach(({key,count},i)=>lines.push(`  ${String(i+1).padStart(2,"0")}. ${key.padEnd(34)}${String(count).padStart(6)}  (${(count/n*100).toFixed(1)}%)`));lines.push("","── BY REGION ────────────────────────────────────────────");vc(r,"Region",8).forEach(({key,count})=>lines.push(`  ${key.padEnd(20)}: ${String(count).padStart(6)}  (${(count/n*100).toFixed(1)}%)`));lines.push("","── MUTAGEN CATEGORY ────────────────────────────────────");vc(r,"Mutagen_Category",5).forEach(({key,count})=>lines.push(`  ${key.padEnd(20)}: ${String(count).padStart(6)}  (${(count/n*100).toFixed(1)}%)`));lines.push("","── DECADAL DISTRIBUTION ────────────────────────────────");const dec={};r.filter(x=>x._decade).forEach(x=>dec[x._decade]=(dec[x._decade]||0)+1);const mxD=Math.max(...Object.values(dec));Object.entries(dec).sort().forEach(([d,c])=>lines.push(`  ${d.padEnd(6)} ${String(c).padStart(5)}  ${"█".repeat(Math.round(c/mxD*24))}`));if(G.cols.includes("Improved_Trait")){const ts=splitT(r);const t10=Object.entries(ts.reduce((a,t)=>{a[t]=(a[t]||0)+1;return a;},{})).sort((a,b)=>b[1]-a[1]).slice(0,10);lines.push("","── TOP 10 IMPROVED TRAITS ──────────────────────────────");t10.forEach(([k,v],i)=>lines.push(`  ${String(i+1).padStart(2,"0")}. ${k.padEnd(38)}${String(v).padStart(5)}  (${(v/ts.length*100).toFixed(1)}%)`));}lines.push("","=".repeat(60),"  Citation: IAEA Mutant Variety Database — https://mvd.iaea.org","=".repeat(60));const txt=lines.join("\n");document.getElementById("rep-box").textContent=txt;document.getElementById("rep-box").dataset.txt=txt;}
 function saveRep(){const txt=document.getElementById("rep-box").dataset.txt;if(!txt||txt.includes("Click")){genRep();setTimeout(()=>{const t=document.getElementById("rep-box").dataset.txt;if(t){const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([t],{type:"text/plain"}));a.download="mvd_report.txt";a.click();}},200);return;}const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([txt],{type:"text/plain"}));a.download="mvd_report.txt";a.click();}
+// Bundle everything generated this session into a single ZIP.
+async function exportZip(){
+  if(!G.rows.length){alert("Load data first.");return;}
+  if(typeof JSZip==="undefined"){alert("ZIP library still loading — try again in a moment.");return;}
+  const st=document.getElementById("zip-status");st.textContent="⏳ Building ZIP…";
+  try{
+    const zip=new JSZip();
+    // 1) processed CSV
+    const cols=G.cols.filter(c=>!c.startsWith("_"));
+    const csv=[cols.join(","),...G.rows.map(r=>cols.map(c=>`"${(r[c]||"").replace(/"/g,'""')}"`).join(","))].join("\n");
+    zip.file("mvd_processed_data.csv",csv);
+    // 2) summary report (generate if needed)
+    genRep();const rep=document.getElementById("rep-box").dataset.txt||"";
+    zip.file("mvd_summary_report.txt",rep);
+    // 3) a PNG of every chart rendered this session
+    const ids=Object.keys(__lastPlot);
+    const charts=zip.folder("charts");
+    let made=0;
+    for(const id of ids){
+      const el=document.getElementById(id);
+      if(!el||!el.querySelector||!el.querySelector(".plot-container"))continue; // only actually-rendered charts
+      let w=900,h=500;try{const ld=el._fullLayout;if(ld&&ld.width)w=ld.width;if(ld&&ld.height)h=ld.height;}catch(e){}
+      st.textContent=`⏳ Rendering chart ${made+1}…`;
+      try{
+        const url=await Plotly.toImage(el,{format:"png",width:Math.round(w),height:Math.round(h),scale:2});
+        const b64=url.split(",")[1];
+        charts.file(`${id}.png`,b64,{base64:true});made++;
+      }catch(e){/* skip a chart that won't render */}
+    }
+    // 4) a small manifest
+    zip.file("README.txt",`MVD Analysis Suite — export bundle\nGenerated: ${new Date().toLocaleString()}\n\nContents:\n  mvd_processed_data.csv   — full dataset with derived columns\n  mvd_summary_report.txt   — dataset summary\n  charts/                  — ${made} chart image(s) generated this session\n\nData: IAEA Mutant Variety Database (mvd.iaea.org)\n`);
+    const blob=await zip.generateAsync({type:"blob"});
+    const a=document.createElement("a");a.href=URL.createObjectURL(blob);
+    a.download=`mvd_export_${new Date().toISOString().slice(0,10)}.zip`;a.click();
+    st.textContent=`✅ ZIP ready — ${made} chart(s) + CSV + report.${made===0?" (Generate some charts first to include them.)":""}`;
+  }catch(e){st.textContent="⚠ ZIP failed: "+e.message;}
+}
 </script>
 </body>
 </html>
